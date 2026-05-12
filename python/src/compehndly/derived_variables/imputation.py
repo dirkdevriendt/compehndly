@@ -138,6 +138,8 @@ def random_single_imputation_kernel(
     biomarker: pl.Series,
     lod: float,
     loq: float,
+    min_unique_values: int = 0,
+    min_observed_percentage: int = 0,
     seed: int | None = None,
 ) -> pl.Series:
     _validate_scalar_thresholds(loq, lod)
@@ -145,36 +147,61 @@ def random_single_imputation_kernel(
     biomarker_np = biomarker.cast(pl.Float64).to_numpy()
     biomarker_filled = np.where(np.isnan(biomarker_np), -1.0, biomarker_np)
 
-    censored = biomarker_filled < 0
-    values_np = np.where(censored, lod, biomarker_filled)
+    # perform configurable data checks
+    checks_failed = False
 
-    dist = fit_censored_lognorm(values_np, censored)
-    rng = np.random.default_rng(seed=seed)
+    # check: at least [min_observed_percentage] % of the values are above LOD/LOQ
+    if not checks_failed:
+        count_above_lod_loq = np.count_nonzero(
+            biomarker_filled > (lod if lod else loq)
+        )
+        if (
+            count_above_lod_loq
+            < biomarker_np.size / 100.0 * min_observed_percentage
+        ):
+            checks_failed = True
 
-    lower = np.zeros_like(biomarker_filled, dtype=float)
-    upper = np.zeros_like(biomarker_filled, dtype=float)
+    # check: at least [min_unique_values] unique values are observed above LOD/LOQ
+    if not checks_failed:
+        count_unique_values_above_lod_loq = np.unique(
+            biomarker_filled[biomarker_filled > (lod if lod else loq)]
+        ).size
+        if count_unique_values_above_lod_loq < min_unique_values:
+            checks_failed = True
 
-    cat_below_lod = biomarker_filled == -1
-    cat_between = biomarker_filled == -2
-    cat_below_loq = biomarker_filled == -3
+    if checks_failed:
+        result = [np.nan] * biomarker_np.size
+    else:
+        censored = biomarker_filled < 0
+        values_np = np.where(censored, lod, biomarker_filled)
 
-    lower[cat_below_lod] = 0
-    upper[cat_below_lod] = lod
+        dist = fit_censored_lognorm(values_np, censored)
+        rng = np.random.default_rng(seed=seed)
 
-    lower[cat_between] = lod
-    upper[cat_between] = loq
+        lower = np.zeros_like(biomarker_filled, dtype=float)
+        upper = np.zeros_like(biomarker_filled, dtype=float)
 
-    lower[cat_below_loq] = 0
-    upper[cat_below_loq] = loq
+        cat_below_lod = biomarker_filled == -1
+        cat_between = biomarker_filled == -2
+        cat_below_loq = biomarker_filled == -3
 
-    cdf_lo = dist.cdf(lower)
-    cdf_hi = dist.cdf(upper)
+        lower[cat_below_lod] = 0
+        upper[cat_below_lod] = lod
 
-    u = rng.uniform(cdf_lo, cdf_hi)
-    imputed = dist.ppf(u)
+        lower[cat_between] = lod
+        upper[cat_between] = loq
 
-    result = biomarker_filled.copy()
-    result[censored] = imputed[censored]
+        lower[cat_below_loq] = 0
+        upper[cat_below_loq] = loq
+
+        cdf_lo = dist.cdf(lower)
+        cdf_hi = dist.cdf(upper)
+
+        u = rng.uniform(cdf_lo, cdf_hi)
+        imputed = dist.ppf(u)
+
+        result = biomarker_filled.copy()
+        result[censored] = imputed[censored]
 
     return pl.Series(result, dtype=pl.Float64)
 
@@ -183,6 +210,8 @@ def random_single_imputation_expr(
     biomarker: pl.Expr,
     lod: float,
     loq: float,
+    min_unique_values: int = 0,
+    min_observed_percentage: int = 0,
     seed: int | None = None,
 ) -> pl.Expr:
     _validate_scalar_thresholds(loq, lod)
@@ -192,6 +221,8 @@ def random_single_imputation_expr(
             s.struct.field("_biomarker"),
             lod=lod,
             loq=loq,
+            min_unique_values=min_unique_values,
+            min_observed_percentage=min_observed_percentage,
             seed=seed,
         ),
         return_dtype=pl.Float64,
