@@ -13,7 +13,13 @@ class TestImputation:
         loq = 4.0
 
         out = apply(
-            "random_single_imputation", biomarker, lod=lod, loq=loq, seed=123
+            "random_single_imputation",
+            biomarker,
+            lod=lod,
+            loq=loq,
+            min_unique_values=3,
+            min_observed_percentage=50,
+            seed=123,
         )
 
         out_np = out.to_numpy()
@@ -38,6 +44,8 @@ class TestImputation:
             pl.Series(biomarker),
             lod=lod,
             loq=loq,
+            min_unique_values=1,
+            min_observed_percentage=30,
             seed=42,
         )
 
@@ -49,6 +57,44 @@ class TestImputation:
         assert 2.0 <= imputed[1] <= 4.0
         assert 0 <= imputed[2] <= 4.0
         assert np.all(out_np[3:] >= loq)
+
+    def test_random_single_imputation_insufficient_observed_values(self):
+        biomarker = pl.Series([5.0, -1.0, -2.0, -1.0, -3.0, -2.0])
+        lod = 2.0
+        loq = 4.0
+
+        out = apply(
+            "random_single_imputation",
+            biomarker,
+            lod=lod,
+            loq=loq,
+            min_observed_percentage=30,
+            seed=123,
+        )
+
+        out_np = out.to_numpy()
+        assert np.all(
+            np.isnan(out_np)
+        ), "Failing check: all values should be NaN."
+
+    def test_random_single_imputation_insufficient_unique_values(self):
+        biomarker = pl.Series([5.0, -1.0, -2.0, 8.0, -3.0, 8.0])
+        lod = 2.0
+        loq = 4.0
+
+        out = apply(
+            "random_single_imputation",
+            biomarker,
+            lod=lod,
+            loq=loq,
+            min_unique_values=3,
+            seed=123,
+        )
+
+        out_np = out.to_numpy()
+        assert np.all(
+            np.isnan(out_np)
+        ), "Failing check: all values should be NaN."
 
     def test_medium_bound_imputation_scalar_input(self):
         measurement = pl.Series([0.2, 1.2, 2.5])
